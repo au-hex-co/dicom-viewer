@@ -168,40 +168,36 @@
   }
 </style>
 <script type="module">
-import {App, AppOptions, ViewConfig, ToolConfig} from
-  'https://cdn.jsdelivr.net/npm/dwv@0.36.4/dist/dwv.min.js';
-
-const app = new App();
-const layerGroupDivId = 'layerGroup0';
-
-const tools = {
-  Scroll: new ToolConfig(),
-  WindowLevel: new ToolConfig(),
-  ZoomAndPan: new ToolConfig()
-};
-
-const viewConfig0 = new ViewConfig(layerGroupDivId);
-const appOptions = new AppOptions({'*': [viewConfig0]});
-appOptions.tools = tools;
-app.init(appOptions);
-
-window.addEventListener('resize', () => app.onResize());
-
-// ---- state ----
-const seriesList = []; // {dataId, label, sub}
-let activeDataId = null;
-let firstDataIdOfBatch = null;
-
-// ---- DOM refs ----
+// ---- DOM refs (grabbed first, independent of the dwv library) ----
 const sidebarEl = document.getElementById('sidebar');
 const statusEl = document.getElementById('status');
 const progressEl = document.getElementById('progress');
 const dropHintEl = document.getElementById('dropHint');
 const viewAreaEl = document.getElementById('viewArea');
+const errorBannerEl = document.getElementById('errorBanner');
 
 function setStatus(text) {
   statusEl.textContent = text;
 }
+
+function showError(text) {
+  errorBannerEl.textContent = text;
+  errorBannerEl.style.display = 'block';
+}
+
+window.addEventListener('error', (event) => {
+  showError('Script error: ' + event.message);
+});
+window.addEventListener('unhandledrejection', (event) => {
+  showError('Script error: ' + (event.reason && event.reason.message ?
+    event.reason.message : event.reason));
+});
+
+// ---- state ----
+const seriesList = []; // {dataId, label, sub}
+let activeDataId = null;
+let firstDataIdOfBatch = null;
+let app = null;
 
 function metaString(meta, tag) {
   if (!meta || typeof meta[tag] === 'undefined') {
@@ -234,72 +230,6 @@ function renderSidebar() {
   }
 }
 
-// ---- dwv event wiring ----
-let nLoaded = 0;
-let nErrors = 0;
-
-app.addEventListener('loadstart', () => {
-  nLoaded = 0;
-  nErrors = 0;
-  firstDataIdOfBatch = null;
-  progressEl.style.display = 'inline-block';
-  progressEl.value = 0;
-  setStatus('Loading...');
-});
-
-app.addEventListener('loadprogress', (event) => {
-  if (typeof event.loaded === 'number') {
-    progressEl.value = event.loaded;
-  }
-});
-
-app.addEventListener('load', (event) => {
-  const dataId = event.dataid;
-  if (firstDataIdOfBatch === null) {
-    firstDataIdOfBatch = dataId;
-  }
-  const meta = app.getMetaData(dataId);
-  const desc = metaString(meta, '0008103E'); // SeriesDescription
-  const modality = metaString(meta, '00080060'); // Modality
-  const seriesNum = metaString(meta, '00200011'); // SeriesNumber
-  const label = desc || (modality ? modality + ' series' : 'Series');
-  const sub = [seriesNum ? '#' + seriesNum : null, modality]
-    .filter(Boolean).join(' · ');
-
-  if (!seriesList.find((s) => s.dataId === dataId)) {
-    seriesList.push({dataId, label, sub});
-    nLoaded++;
-  }
-  dropHintEl.classList.add('hidden');
-  renderSidebar();
-});
-
-app.addEventListener('loaditem', (event) => {
-  if (typeof event.warn !== 'undefined') {
-    console.warn('load-warn', event.warn);
-  }
-});
-
-app.addEventListener('loaderror', (event) => {
-  nErrors++;
-  console.warn('load error', event.error);
-});
-
-app.addEventListener('loadend', () => {
-  progressEl.style.display = 'none';
-  if (activeDataId === null && firstDataIdOfBatch !== null) {
-    activeDataId = firstDataIdOfBatch;
-    app.render(activeDataId);
-    renderSidebar();
-  }
-  const total = seriesList.length;
-  let msg = total + ' series loaded';
-  if (nErrors > 0) {
-    msg += ' (' + nErrors + ' file(s) skipped)';
-  }
-  setStatus(msg);
-});
-
 // ---- file filtering ----
 function isLikelyDicom(file) {
   const name = file.name.toLowerCase();
@@ -315,9 +245,14 @@ function isLikelyDicom(file) {
 }
 
 function loadFileList(files) {
+  if (!app) {
+    showError('Viewer library is not ready yet. Wait a moment and try again, ' +
+      'or refresh the page.');
+    return;
+  }
   const filtered = Array.from(files).filter(isLikelyDicom);
   if (filtered.length === 0) {
-    setStatus('No DICOM files found in selection.');
+    setStatus('No DICOM files found in selection (' + files.length + ' file(s) checked).');
     return;
   }
   app.loadFiles(filtered);
@@ -429,6 +364,9 @@ const toolButtons = {
   ZoomAndPan: document.getElementById('toolZoomPan')
 };
 function setActiveTool(name) {
+  if (!app) {
+    return;
+  }
   try {
     app.setTool(name);
   } catch (e) {
@@ -442,15 +380,114 @@ toolButtons.Scroll.addEventListener('click', () => setActiveTool('Scroll'));
 toolButtons.WindowLevel.addEventListener('click', () => setActiveTool('WindowLevel'));
 toolButtons.ZoomAndPan.addEventListener('click', () => setActiveTool('ZoomAndPan'));
 document.getElementById('btnReset').addEventListener('click', () => {
-  app.resetZoomPan();
+  if (app) {
+    app.resetZoomPan();
+  }
 });
 
-// default tool once first data is ready
-app.addEventListener('load', () => {
-  setActiveTool('Scroll');
-}, {once: true});
-
 renderSidebar();
+
+// ---- dwv library init (dynamic import so a load failure never breaks
+//      the buttons / drag-drop wired above) ----
+let nErrors = 0;
+
+async function initViewer() {
+  setStatus('Loading viewer library...');
+  let dwv;
+  try {
+    dwv = await import('https://cdn.jsdelivr.net/npm/dwv@0.36.4/dist/dwv.min.js');
+  } catch (e) {
+    showError('Could not load the DICOM viewer library (network issue or ' +
+      'blocked CDN). Check your connection and refresh the page. ' +
+      'Details: ' + e.message);
+    return;
+  }
+
+  try {
+    const {App, AppOptions, ViewConfig, ToolConfig} = dwv;
+    app = new App();
+
+    const tools = {
+      Scroll: new ToolConfig(),
+      WindowLevel: new ToolConfig(),
+      ZoomAndPan: new ToolConfig()
+    };
+    const viewConfig0 = new ViewConfig('layerGroup0');
+    const appOptions = new AppOptions({'*': [viewConfig0]});
+    appOptions.tools = tools;
+    app.init(appOptions);
+
+    window.addEventListener('resize', () => app.onResize());
+
+    app.addEventListener('loadstart', () => {
+      nErrors = 0;
+      firstDataIdOfBatch = null;
+      progressEl.style.display = 'inline-block';
+      progressEl.value = 0;
+      setStatus('Loading...');
+    });
+
+    app.addEventListener('loadprogress', (event) => {
+      if (typeof event.loaded === 'number') {
+        progressEl.value = event.loaded;
+      }
+    });
+
+    app.addEventListener('load', (event) => {
+      const dataId = event.dataid;
+      if (firstDataIdOfBatch === null) {
+        firstDataIdOfBatch = dataId;
+      }
+      const meta = app.getMetaData(dataId);
+      const desc = metaString(meta, '0008103E'); // SeriesDescription
+      const modality = metaString(meta, '00080060'); // Modality
+      const seriesNum = metaString(meta, '00200011'); // SeriesNumber
+      const label = desc || (modality ? modality + ' series' : 'Series');
+      const sub = [seriesNum ? '#' + seriesNum : null, modality]
+        .filter(Boolean).join(' · ');
+
+      if (!seriesList.find((s) => s.dataId === dataId)) {
+        seriesList.push({dataId, label, sub});
+      }
+      dropHintEl.classList.add('hidden');
+      renderSidebar();
+      setActiveTool('Scroll');
+    });
+
+    app.addEventListener('loaditem', (event) => {
+      if (typeof event.warn !== 'undefined') {
+        console.warn('load-warn', event.warn);
+      }
+    });
+
+    app.addEventListener('loaderror', (event) => {
+      nErrors++;
+      console.warn('load error', event.error);
+    });
+
+    app.addEventListener('loadend', () => {
+      progressEl.style.display = 'none';
+      if (activeDataId === null && firstDataIdOfBatch !== null) {
+        activeDataId = firstDataIdOfBatch;
+        app.render(activeDataId);
+        renderSidebar();
+      }
+      const total = seriesList.length;
+      let msg = total + ' series loaded';
+      if (nErrors > 0) {
+        msg += ' (' + nErrors + ' file(s) skipped)';
+      }
+      setStatus(msg);
+    });
+
+    setStatus('Ready — upload or drag a folder to begin.');
+  } catch (e) {
+    showError('The DICOM viewer library loaded but failed to start: ' +
+      e.message + '. Try refreshing the page.');
+  }
+}
+
+initViewer();
 </script>
 </head>
 <body>
@@ -463,6 +500,8 @@ renderSidebar();
     Not for diagnostic or clinical use.
   </span>
 </header>
+
+<div id="errorBanner" style="display:none; background:#dc2626; color:#fff; padding:8px 16px; font-size:13px;"></div>
 
 <div class="toolbar">
   <button class="primary" id="btnFolder">Upload Folder</button>
