@@ -6,6 +6,28 @@
 <meta name="description" content="Private, in-browser DICOM viewer. Files are never uploaded anywhere.">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <style>
+  :root {
+    --bg: #fff;
+    --fg: #111;
+    --muted: #666;
+    --border: #ddd;
+    --panel: #f6f6f6;
+    --accent: #2563eb;
+    --accent-fg: #fff;
+    --canvas-bg: #000;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1e1e1e;
+      --fg: #eee;
+      --muted: #aaa;
+      --border: #3a3a3a;
+      --panel: #262626;
+      --accent: #3b82f6;
+      --accent-fg: #fff;
+      --canvas-bg: #000;
+    }
+  }
   html, body {
     height: 100%;
     margin: 0;
@@ -13,52 +35,458 @@
   }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-    background: #fff;
-    color: #111;
+    background: var(--bg);
+    color: var(--fg);
     display: flex;
     flex-direction: column;
   }
   header {
     padding: 10px 16px;
-    border-bottom: 1px solid #ddd;
+    border-bottom: 1px solid var(--border);
     font-size: 14px;
     line-height: 1.4;
   }
   header strong { font-size: 16px; }
-  header .note {
-    color: #666;
-    font-size: 12.5px;
+  header .note { color: var(--muted); font-size: 12.5px; }
+
+  .toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
   }
+  .toolbar button {
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .toolbar button.primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+  }
+  .toolbar button.active {
+    background: var(--accent);
+    color: var(--accent-fg);
+    border-color: var(--accent);
+  }
+  .toolbar .sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+    margin: 0 4px;
+  }
+  .toolbar .status {
+    margin-left: auto;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  progress {
+    width: 120px;
+    height: 8px;
+  }
+
   main {
     flex: 1;
     min-height: 0;
+    display: flex;
   }
-  dwv-simple {
+
+  #sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #sidebar .empty {
+    padding: 16px;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+  .series-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 10px 12px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--fg);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+  .series-item:hover { background: var(--bg); }
+  .series-item.active {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+  .series-item .n { font-weight: 600; display: block; }
+  .series-item .d { opacity: 0.8; }
+
+  #viewArea {
+    flex: 1;
+    position: relative;
+    background: var(--canvas-bg);
+    min-width: 0;
+  }
+  #layerGroup0 {
     width: 100%;
     height: 100%;
-    display: block;
   }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1e1e1e; color: #eee; }
-    header { border-bottom-color: #3a3a3a; }
-    header .note { color: #aaa; }
+  #dropHint {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 10px;
+    color: #aaa;
+    font-size: 14px;
+    text-align: center;
+    padding: 24px;
+    pointer-events: none;
+  }
+  #dropHint.hidden { display: none; }
+  #viewArea.dragover::after {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border: 2px dashed var(--accent);
+    border-radius: 8px;
+    pointer-events: none;
   }
 </style>
-<script type="module" src="https://cdn.jsdelivr.net/gh/ivmartel/dwv-simplistic@main/dist/dwvsimplistic.min.js"></script>
+<script type="module">
+import {App, AppOptions, ViewConfig, ToolConfig} from
+  'https://cdn.jsdelivr.net/npm/dwv@0.36.4/dist/dwv.min.js';
+
+const app = new App();
+const layerGroupDivId = 'layerGroup0';
+
+const tools = {
+  Scroll: new ToolConfig(),
+  WindowLevel: new ToolConfig(),
+  ZoomAndPan: new ToolConfig()
+};
+
+const viewConfig0 = new ViewConfig(layerGroupDivId);
+const appOptions = new AppOptions({'*': [viewConfig0]});
+appOptions.tools = tools;
+app.init(appOptions);
+
+window.addEventListener('resize', () => app.onResize());
+
+// ---- state ----
+const seriesList = []; // {dataId, label, sub}
+let activeDataId = null;
+let firstDataIdOfBatch = null;
+
+// ---- DOM refs ----
+const sidebarEl = document.getElementById('sidebar');
+const statusEl = document.getElementById('status');
+const progressEl = document.getElementById('progress');
+const dropHintEl = document.getElementById('dropHint');
+const viewAreaEl = document.getElementById('viewArea');
+
+function setStatus(text) {
+  statusEl.textContent = text;
+}
+
+function metaString(meta, tag) {
+  if (!meta || typeof meta[tag] === 'undefined') {
+    return undefined;
+  }
+  let v = meta[tag].value;
+  if (Array.isArray(v)) {
+    v = v[0];
+  }
+  return typeof v === 'undefined' ? undefined : v.toString();
+}
+
+function renderSidebar() {
+  if (seriesList.length === 0) {
+    sidebarEl.innerHTML = '<div class="empty">No series loaded yet.</div>';
+    return;
+  }
+  sidebarEl.innerHTML = '';
+  for (const s of seriesList) {
+    const btn = document.createElement('button');
+    btn.className = 'series-item' + (s.dataId === activeDataId ? ' active' : '');
+    btn.innerHTML = '<span class="n">' + s.label + '</span>' +
+      (s.sub ? '<span class="d">' + s.sub + '</span>' : '');
+    btn.addEventListener('click', () => {
+      activeDataId = s.dataId;
+      app.render(s.dataId);
+      renderSidebar();
+    });
+    sidebarEl.appendChild(btn);
+  }
+}
+
+// ---- dwv event wiring ----
+let nLoaded = 0;
+let nErrors = 0;
+
+app.addEventListener('loadstart', () => {
+  nLoaded = 0;
+  nErrors = 0;
+  firstDataIdOfBatch = null;
+  progressEl.style.display = 'inline-block';
+  progressEl.value = 0;
+  setStatus('Loading...');
+});
+
+app.addEventListener('loadprogress', (event) => {
+  if (typeof event.loaded === 'number') {
+    progressEl.value = event.loaded;
+  }
+});
+
+app.addEventListener('load', (event) => {
+  const dataId = event.dataid;
+  if (firstDataIdOfBatch === null) {
+    firstDataIdOfBatch = dataId;
+  }
+  const meta = app.getMetaData(dataId);
+  const desc = metaString(meta, '0008103E'); // SeriesDescription
+  const modality = metaString(meta, '00080060'); // Modality
+  const seriesNum = metaString(meta, '00200011'); // SeriesNumber
+  const label = desc || (modality ? modality + ' series' : 'Series');
+  const sub = [seriesNum ? '#' + seriesNum : null, modality]
+    .filter(Boolean).join(' · ');
+
+  if (!seriesList.find((s) => s.dataId === dataId)) {
+    seriesList.push({dataId, label, sub});
+    nLoaded++;
+  }
+  dropHintEl.classList.add('hidden');
+  renderSidebar();
+});
+
+app.addEventListener('loaditem', (event) => {
+  if (typeof event.warn !== 'undefined') {
+    console.warn('load-warn', event.warn);
+  }
+});
+
+app.addEventListener('loaderror', (event) => {
+  nErrors++;
+  console.warn('load error', event.error);
+});
+
+app.addEventListener('loadend', () => {
+  progressEl.style.display = 'none';
+  if (activeDataId === null && firstDataIdOfBatch !== null) {
+    activeDataId = firstDataIdOfBatch;
+    app.render(activeDataId);
+    renderSidebar();
+  }
+  const total = seriesList.length;
+  let msg = total + ' series loaded';
+  if (nErrors > 0) {
+    msg += ' (' + nErrors + ' file(s) skipped)';
+  }
+  setStatus(msg);
+});
+
+// ---- file filtering ----
+function isLikelyDicom(file) {
+  const name = file.name.toLowerCase();
+  if (name === 'dicomdir') {
+    return false;
+  }
+  const dot = name.lastIndexOf('.');
+  if (dot === -1) {
+    return true;
+  }
+  const ext = name.slice(dot);
+  return ext === '.dcm' || ext === '.dicom' || ext === '.dic';
+}
+
+function loadFileList(files) {
+  const filtered = Array.from(files).filter(isLikelyDicom);
+  if (filtered.length === 0) {
+    setStatus('No DICOM files found in selection.');
+    return;
+  }
+  app.loadFiles(filtered);
+}
+
+// ---- folder / file pickers ----
+document.getElementById('folderInput').addEventListener('change', (event) => {
+  loadFileList(event.target.files);
+  event.target.value = '';
+});
+document.getElementById('fileInput').addEventListener('change', (event) => {
+  loadFileList(event.target.files);
+  event.target.value = '';
+});
+document.getElementById('btnFolder').addEventListener('click', () => {
+  document.getElementById('folderInput').click();
+});
+document.getElementById('btnFiles').addEventListener('click', () => {
+  document.getElementById('fileInput').click();
+});
+
+// ---- recursive drag & drop ----
+function readEntryContentsAsync(entry) {
+  return new Promise((resolve, reject) => {
+    const reader = entry.createReader();
+    let all = [];
+    function readBatch() {
+      reader.readEntries((batch) => {
+        if (batch.length === 0) {
+          resolve(all);
+        } else {
+          all = all.concat(batch);
+          readBatch();
+        }
+      }, reject);
+    }
+    readBatch();
+  });
+}
+
+function fileFromEntryAsync(entry) {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+async function collectFilesFromEntry(entry, out) {
+  if (entry.isFile) {
+    try {
+      const file = await fileFromEntryAsync(entry);
+      out.push(file);
+    } catch (e) {
+      console.warn('Could not read file entry', entry, e);
+    }
+  } else if (entry.isDirectory) {
+    const children = await readEntryContentsAsync(entry);
+    for (const child of children) {
+      await collectFilesFromEntry(child, out);
+    }
+  }
+}
+
+async function collectFilesFromDataTransfer(dataTransfer) {
+  const out = [];
+  if (dataTransfer.items && dataTransfer.items.length > 0 &&
+    typeof dataTransfer.items[0].webkitGetAsEntry === 'function') {
+    const entries = [];
+    for (let i = 0; i < dataTransfer.items.length; i++) {
+      const entry = dataTransfer.items[i].webkitGetAsEntry();
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+    for (const entry of entries) {
+      await collectFilesFromEntry(entry, out);
+    }
+  } else if (dataTransfer.files) {
+    // fallback: flat file list only
+    out.push(...Array.from(dataTransfer.files));
+  }
+  return out;
+}
+
+['dragenter', 'dragover'].forEach((evt) => {
+  viewAreaEl.addEventListener(evt, (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    viewAreaEl.classList.add('dragover');
+  });
+});
+['dragleave', 'dragend'].forEach((evt) => {
+  viewAreaEl.addEventListener(evt, (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    viewAreaEl.classList.remove('dragover');
+  });
+});
+viewAreaEl.addEventListener('drop', async (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  viewAreaEl.classList.remove('dragover');
+  setStatus('Scanning folder(s)...');
+  const files = await collectFilesFromDataTransfer(event.dataTransfer);
+  loadFileList(files);
+});
+
+// ---- tool buttons ----
+const toolButtons = {
+  Scroll: document.getElementById('toolScroll'),
+  WindowLevel: document.getElementById('toolWindowLevel'),
+  ZoomAndPan: document.getElementById('toolZoomPan')
+};
+function setActiveTool(name) {
+  try {
+    app.setTool(name);
+  } catch (e) {
+    console.warn('setTool failed', e);
+  }
+  for (const key of Object.keys(toolButtons)) {
+    toolButtons[key].classList.toggle('active', key === name);
+  }
+}
+toolButtons.Scroll.addEventListener('click', () => setActiveTool('Scroll'));
+toolButtons.WindowLevel.addEventListener('click', () => setActiveTool('WindowLevel'));
+toolButtons.ZoomAndPan.addEventListener('click', () => setActiveTool('ZoomAndPan'));
+document.getElementById('btnReset').addEventListener('click', () => {
+  app.resetZoomPan();
+});
+
+// default tool once first data is ready
+app.addEventListener('load', () => {
+  setActiveTool('Scroll');
+}, {once: true});
+
+renderSidebar();
+</script>
 </head>
 <body>
 
 <header>
   <strong>MRI / DICOM Viewer</strong><br>
   <span class="note">
-    Runs entirely in your browser. Nothing is uploaded &mdash; drag your DICOM folder/files
-    onto the viewer below, or use the open-file button in the toolbar.
+    Runs entirely in your browser &mdash; nothing is ever uploaded. Select or drag a
+    whole folder in; every subfolder is searched for DICOM images automatically.
     Not for diagnostic or clinical use.
   </span>
 </header>
 
+<div class="toolbar">
+  <button class="primary" id="btnFolder">Upload Folder</button>
+  <button id="btnFiles">Upload Files</button>
+  <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none">
+  <input type="file" id="fileInput" multiple style="display:none">
+  <div class="sep"></div>
+  <button id="toolScroll" title="Scroll through slices">Scroll</button>
+  <button id="toolWindowLevel" title="Adjust brightness/contrast">Window/Level</button>
+  <button id="toolZoomPan" title="Zoom and pan">Zoom/Pan</button>
+  <button id="btnReset" title="Reset view">Reset</button>
+  <div class="status" id="status"></div>
+  <progress id="progress" value="0" max="100" style="display:none"></progress>
+</div>
+
 <main>
-  <dwv-simple showlegend tools="scroll windowlevel zoompan"></dwv-simple>
+  <div id="sidebar"><div class="empty">No series loaded yet.</div></div>
+  <div id="viewArea">
+    <div id="dropHint">
+      <div>Drag a folder here, or use &ldquo;Upload Folder&rdquo; above.<br>
+      All subfolders are searched for DICOM images.</div>
+    </div>
+    <div id="layerGroup0"></div>
+  </div>
 </main>
 
 </body>
