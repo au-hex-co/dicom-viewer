@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MRI / DICOM Viewer</title>
+<meta name="description" content="Private, in-browser DICOM viewer. Files are never uploaded anywhere.">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    background: #fff;
+    color: #111;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid #ddd;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+  header strong { font-size: 16px; }
+  header .note {
+    color: #666;
+    font-size: 12.5px;
+  }
+  main {
+    flex: 1;
+    min-height: 0;
+  }
+  dwv-simple {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1e1e1e; color: #eee; }
+    header { border-bottom-color: #3a3a3a; }
+    header .note { color: #aaa; }
+  }
+</style>
+<script type="module" src="https://cdn.jsdelivr.net/gh/ivmartel/dwv-simplistic@main/dist/dwvsimplistic.min.js"></script>
+</head>
+<body>
+
+<header>
+  <strong>MRI / DICOM Viewer</strong><br>
+  <span class="note">
+    Runs entirely in your browser. Nothing is uploaded &mdash; drag your DICOM folder/files
+    onto the viewer below, or use the open-file button in the toolbar.
+    Not for diagnostic or clinical use.
+  </span>
+</header>
+
+<main>
+  <dwv-simple showlegend tools="scroll windowlevel zoompan"></dwv-simple>
+</main>
+
+</body>
+</html>
