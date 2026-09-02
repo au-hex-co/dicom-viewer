@@ -395,7 +395,7 @@ async function initViewer() {
   setStatus('Loading viewer library...');
   let dwv;
   try {
-    dwv = await import('https://cdn.jsdelivr.net/npm/dwv@0.36.4/dist/dwv.min.js');
+    dwv = await import('https://esm.sh/dwv@0.36.4');
   } catch (e) {
     showError('Could not load the DICOM viewer library (network issue or ' +
       'blocked CDN). Check your connection and refresh the page. ' +
