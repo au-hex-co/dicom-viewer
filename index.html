@@ -255,7 +255,102 @@ function switchToSeries(dataId) {
   app.render(dataId);
   renderSidebar();
   // let dwv finish its draw before sampling the canvas
-  setTimeout(updateDebugInfo, 150);
+  setTimeout(() => {
+    tryFixOffCanvasRender();
+    updateDebugInfo();
+  }, 150);
+}
+
+function isCanvasBlank(canvas) {
+  try {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w === 0 || h === 0) {
+      return true;
+    }
+    const points = [
+      [Math.floor(w / 2), Math.floor(h / 2)],
+      [Math.floor(w / 4), Math.floor(h / 4)],
+      [Math.floor(3 * w / 4), Math.floor(3 * h / 4)]
+    ];
+    return points.every(([x, y]) => ctx.getImageData(x, y, 1, 1).data[3] === 0);
+  } catch (e) {
+    return false;
+  }
+}
+
+function getScaleSign(canvas) {
+  const t = canvas.getContext('2d').getTransform();
+  return {a: t.a, d: t.d};
+}
+
+// dwv (0.36.4) can compute a layer scale with a negative axis for
+// oblique orientation codes that aren't in its internal flip-
+// compensation table (observed here for DICOM orientation code "PRS",
+// on the two heavily-oblique transverse series), without the matching
+// offset compensation -- pushing the whole rendered image off-canvas
+// (canvas exists at the right size, but every pixel reads back fully
+// transparent; console shows "Unsupported orientation code: PRS").
+//
+// Which internal flip toggle (x vs y) ends up correcting the visible
+// canvas's x-scale vs y-scale is not 1:1 -- the image's own oblique
+// orientation matrix permutes axes, and empirically the mapping isn't
+// even consistent for the same series across reloads (it depends on
+// whether dwv treats this layer as the "base" layer or not). So rather
+// than hardcode a fix per orientation code, detect the symptom (blank
+// canvas after render) and try the flip-toggle combinations dwv's own
+// flip-compensation table would pick from, keeping whichever one
+// actually produces visible content, verified by resampling the canvas.
+function applyFlipToggle(vl, canvas, before, toggleX, toggleY) {
+  if (toggleX) {
+    vl.flipScaleX();
+  }
+  if (toggleY) {
+    vl.flipScaleY();
+  }
+  vl.setScale({x: 1, y: 1, z: 1});
+  const afterScale = getScaleSign(canvas);
+  // compensate whichever *screen* axis actually flipped sign, not
+  // necessarily the axis named in the toggle we just applied
+  const fixA = (afterScale.a < 0) !== (before.a < 0);
+  const fixD = (afterScale.d < 0) !== (before.d < 0);
+  if (fixA) {
+    vl.addFlipOffsetX();
+  }
+  if (fixD) {
+    vl.addFlipOffsetY();
+  }
+  vl.draw();
+  return {fixA, fixD};
+}
+
+function tryFixOffCanvasRender() {
+  const layerGroup = app.getLayerGroupByDivId('layerGroup0');
+  if (!layerGroup) {
+    return;
+  }
+  const canvas = document.querySelector('#layerGroup0 canvas');
+  if (!canvas || !isCanvasBlank(canvas)) {
+    return;
+  }
+  const vl = layerGroup.getActiveViewLayer();
+  if (!vl) {
+    return;
+  }
+
+  const before = getScaleSign(canvas);
+  const attempts = [[true, false], [false, true], [true, true]];
+  for (const [toggleX, toggleY] of attempts) {
+    const {fixA, fixD} = applyFlipToggle(vl, canvas, before, toggleX, toggleY);
+    if (!isCanvasBlank(canvas)) {
+      return;
+    }
+    // that combination didn't help: applying the same toggles again
+    // cancels them (flip is a sign toggle, offset add is self-
+    // cancelling once the scale sign is restored), back to pre-attempt
+    applyFlipToggle(vl, canvas, getScaleSign(canvas), toggleX, toggleY);
+  }
 }
 
 let lastError = null;
