@@ -223,13 +223,26 @@ function renderSidebar() {
     btn.className = 'series-item' + (s.dataId === activeDataId ? ' active' : '');
     btn.innerHTML = '<span class="n">' + s.label + '</span>' +
       (s.sub ? '<span class="d">' + s.sub + '</span>' : '');
-    btn.addEventListener('click', () => {
-      activeDataId = s.dataId;
-      app.render(s.dataId);
-      renderSidebar();
-    });
+    btn.addEventListener('click', () => switchToSeries(s.dataId));
     sidebarEl.appendChild(btn);
   }
+}
+
+// dwv treats layers sharing a layer group as overlays and refuses to render
+// one whose orientation/geometry doesn't match what's already there (common
+// here: coronal/axial/sagittal series in the same study). Only one series is
+// ever meant to be visible at a time, so clear the group before switching.
+function switchToSeries(dataId) {
+  if (!app) {
+    return;
+  }
+  const layerGroup = app.getLayerGroupByDivId('layerGroup0');
+  if (layerGroup) {
+    layerGroup.empty();
+  }
+  activeDataId = dataId;
+  app.render(dataId);
+  renderSidebar();
 }
 
 // ---- file filtering ----
@@ -528,21 +541,26 @@ async function initViewer() {
       console.warn('load error', event.error);
     });
 
+    // fires when a series can't auto-render because a different-orientation
+    // series is already showing in the shared layer group; expected/benign
+    // here since only one series is ever meant to be visible at a time
+    app.addEventListener('error', (event) => {
+      console.warn('render skipped', event.error);
+    });
+
     app.addEventListener('loadend', () => {
       if (activeDataId === null && firstDataIdOfBatch !== null) {
         activeDataId = firstDataIdOfBatch;
-        app.render(activeDataId);
-        renderSidebar();
       }
       queueDone++;
       isLoadingQueue = false;
       if (loadQueue.length > 0) {
         processQueue();
       } else {
-        // later series auto-render on load and can steal the view;
-        // put the intended active one back on screen
+        // later series' auto-render attempts may have been skipped (see
+        // above); put the intended active one back on screen for sure
         if (activeDataId !== null) {
-          app.render(activeDataId);
+          switchToSeries(activeDataId);
         }
         progressEl.style.display = 'none';
         const total = seriesList.length;
