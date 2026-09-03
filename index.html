@@ -246,6 +246,7 @@ function switchToSeries(dataId) {
   if (!app) {
     return;
   }
+  lastError = null;
   const layerGroup = app.getLayerGroupByDivId('layerGroup0');
   if (layerGroup) {
     layerGroup.empty();
@@ -253,19 +254,47 @@ function switchToSeries(dataId) {
   activeDataId = dataId;
   app.render(dataId);
   renderSidebar();
-  updateDebugInfo();
+  // let dwv finish its draw before sampling the canvas
+  setTimeout(updateDebugInfo, 150);
 }
 
 let lastError = null;
+function samplePixels(canvas) {
+  try {
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width;
+    const h = canvas.height;
+    if (w === 0 || h === 0) {
+      return 'zero-size canvas';
+    }
+    const points = [
+      [Math.floor(w / 2), Math.floor(h / 2)],
+      [Math.floor(w / 4), Math.floor(h / 4)],
+      [Math.floor(3 * w / 4), Math.floor(3 * h / 4)]
+    ];
+    const vals = points.map(([x, y]) => {
+      const d = ctx.getImageData(x, y, 1, 1).data;
+      return d[0] + ',' + d[1] + ',' + d[2] + ',' + d[3];
+    });
+    return vals.join(' / ');
+  } catch (e) {
+    return 'sample failed: ' + e.message;
+  }
+}
+
 function updateDebugInfo() {
   const layerGroup = app ? app.getLayerGroupByDivId('layerGroup0') : null;
   const nLayers = layerGroup ? layerGroup.getNumberOfLayers() : 'n/a';
   const canvases = document.querySelectorAll('#layerGroup0 canvas');
   let canvasInfo = 'no canvas found';
   if (canvases.length > 0) {
-    const c = canvases[0];
-    canvasInfo = canvases.length + ' canvas(es), 1st size ' + c.width + 'x' +
-      c.height + ' (displayed ' + c.clientWidth + 'x' + c.clientHeight + ')';
+    const parts = [];
+    for (let i = 0; i < canvases.length; i++) {
+      const c = canvases[i];
+      parts.push('#' + i + ' ' + c.width + 'x' + c.height +
+        ' px:[' + samplePixels(c) + ']');
+    }
+    canvasInfo = canvases.length + ' canvas(es): ' + parts.join(' || ');
   }
   let wlInfo = '';
   try {
