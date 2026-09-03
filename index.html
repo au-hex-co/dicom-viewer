@@ -177,6 +177,7 @@ const progressEl = document.getElementById('progress');
 const dropHintEl = document.getElementById('dropHint');
 const viewAreaEl = document.getElementById('viewArea');
 const errorBannerEl = document.getElementById('errorBanner');
+const debugEl = document.getElementById('debugInfo');
 
 function setStatus(text) {
   statusEl.textContent = text;
@@ -243,6 +244,33 @@ function switchToSeries(dataId) {
   activeDataId = dataId;
   app.render(dataId);
   renderSidebar();
+  updateDebugInfo();
+}
+
+let lastError = null;
+function updateDebugInfo() {
+  const layerGroup = app ? app.getLayerGroupByDivId('layerGroup0') : null;
+  const nLayers = layerGroup ? layerGroup.getNumberOfLayers() : 'n/a';
+  const canvases = document.querySelectorAll('#layerGroup0 canvas');
+  let canvasInfo = 'no canvas found';
+  if (canvases.length > 0) {
+    const c = canvases[0];
+    canvasInfo = canvases.length + ' canvas(es), 1st size ' + c.width + 'x' +
+      c.height + ' (displayed ' + c.clientWidth + 'x' + c.clientHeight + ')';
+  }
+  let wlInfo = '';
+  try {
+    const vl = layerGroup ? layerGroup.getActiveViewLayer() : null;
+    if (vl) {
+      const vc = vl.getViewController();
+      const wl = vc.getWindowLevel();
+      wlInfo = ' | WL center=' + wl.center + ' width=' + wl.width;
+    }
+  } catch (e) {
+    wlInfo = ' | WL read failed: ' + e.message;
+  }
+  debugEl.textContent = 'layers: ' + nLayers + ' | ' + canvasInfo + wlInfo +
+    (lastError ? ' | last error: ' + lastError : '');
 }
 
 // ---- file filtering ----
@@ -545,7 +573,9 @@ async function initViewer() {
     // series is already showing in the shared layer group; expected/benign
     // here since only one series is ever meant to be visible at a time
     app.addEventListener('error', (event) => {
+      lastError = (event.error && event.error.message) || String(event.error);
       console.warn('render skipped', event.error);
+      updateDebugInfo();
     });
 
     app.addEventListener('loadend', () => {
@@ -610,6 +640,8 @@ initViewer();
   <div class="status" id="status"></div>
   <progress id="progress" value="0" max="100" style="display:none"></progress>
 </div>
+
+<div id="debugInfo" style="padding:4px 16px; font-size:11px; font-family:monospace; color:var(--muted); border-bottom:1px solid var(--border);"></div>
 
 <main>
   <div id="sidebar"><div class="empty">No series loaded yet.</div></div>
