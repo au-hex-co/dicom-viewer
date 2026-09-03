@@ -169,6 +169,15 @@
     pointer-events: none;
   }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "konva": "https://esm.sh/konva@10.2.0",
+    "jszip": "https://esm.sh/jszip@3.10.1",
+    "magic-wand-tool": "https://esm.sh/magic-wand-tool@1.1.7"
+  }
+}
+</script>
 <script type="module">
 // ---- DOM refs (grabbed first, independent of the dwv library) ----
 const sidebarEl = document.getElementById('sidebar');
@@ -501,7 +510,12 @@ async function initViewer() {
   setStatus('Loading viewer library...');
   let dwv;
   try {
-    dwv = await import('https://esm.sh/dwv@0.36.4');
+    // loaded from jsdelivr (not esm.sh) so dwv's Web Worker decoders
+    // (jpeg2000/jpeg-lossless/rle, needed for some compressed DICOM
+    // files) resolve correctly relative to its own URL; its bare
+    // "konva"/"jszip"/"magic-wand-tool" imports are resolved via the
+    // import map above instead
+    dwv = await import('https://cdn.jsdelivr.net/npm/dwv@0.36.4/dist/dwv.min.js');
   } catch (e) {
     showError('Could not load the DICOM viewer library (network issue or ' +
       'blocked CDN). Check your connection and refresh the page. ' +
